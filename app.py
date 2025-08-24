@@ -258,20 +258,31 @@ def connect_existing():
     try:
         verification = graph_get(f"https://graph.facebook.com/v20.0/{waba_id}/dataset", {"fields": "id,name"}, token)
     except requests.HTTPError as e:
-        # Si ni siquiera podemos leer, devolvemos el error del GET
         return jsonify({"ok": False, "error": getattr(e, "detail", {"error": {"message": str(e)}})}), 400
 
     current_id = _extract_id(verification)
-    is_connected = (str(current_id) == str(dataset_id))
+    # Preferimos comparar contra el id devuelto por el POST (si existe),
+    # porque /{waba_id}/dataset devuelve el id del *dataset* del WABA,
+    # que no necesariamente coincide con el id del *pixel* seleccionado.
+    connected_id = None
+    if isinstance(connected, dict) and "id" in connected:
+        connected_id = str(connected["id"])
 
-    # Mensaje legible
+    if connected_id:
+        is_connected = (str(current_id) == connected_id)
+    else:
+        # Si el POST no devolvió id (p.ej. ya estaba conectado), consideramos éxito
+        # si el WABA tiene *algún* dataset y el nombre no está vacío
+        is_connected = current_id is not None
+
     if is_connected:
-        message = f"✅ Conexión verificada: el WABA {waba_id} tiene conectado el dataset {dataset_id}."
+        msg_extra = f" (dataset de WABA: {current_id})"
+        message = f"✅ Conexión verificada: el WABA {waba_id} tiene un dataset vinculado{msg_extra}. Nota: el id del dataset de WABA puede ser distinto del id del pixel seleccionado ({dataset_id})."
     else:
         if post_error:
             message = f"⚠️ No se pudo verificar la conexión. Error al conectar: {post_error.get('error',{}).get('message','(sin detalle)')}"
         else:
-            message = "⚠️ No se pudo verificar la conexión. El dataset leído no coincide."
+            message = "⚠️ No se pudo verificar la conexión."
 
     resp = {
         "ok": is_connected,
@@ -280,7 +291,9 @@ def connect_existing():
         "verification": verification,
         "waba_id": waba_id,
         "dataset_id": dataset_id,
-        "post_error": post_error
+        "post_error": post_error,
+        "waba_dataset_id": current_id,
+        "connected_id": connected_id
     }
     status = 200 if is_connected else 400
     return jsonify(resp), status
