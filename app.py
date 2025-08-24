@@ -234,8 +234,8 @@ def connect_existing():
     try:
         # Este endpoint de conexión puede variar según el tipo de dataset.
         # A modo de ejemplo, devolvemos una respuesta indicando dónde ajustar el edge real.
-        result = {"ok": True, "message": "Conexión WABA-dataset: ajusta el endpoint aquí según tu integración real.", "dataset_id": dataset_id, "waba_id": waba_id}
-        return jsonify(result)
+        connected = graph_post(f"https://graph.facebook.com/v20.0/{waba_id}/dataset", {"dataset_id": dataset_id}, token)
+        return jsonify({"ok": True, "connected": connected, "dataset_id": dataset_id, "waba_id": waba_id})
     except requests.HTTPError as e:
         return jsonify(getattr(e, "detail", {"error": {"message": str(e)}})), 400
 
