@@ -57,10 +57,10 @@ HTML_TEMPLATE = """
     <title>Gestor de Activos de Meta</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; }
-        .tab-active { border-color: #3b82f6; color: #3b82f6; }
-        .tab-inactive { border-color: transparent; }
-        .log-output { white-space: pre-wrap; word-wrap: break-word; }
+        body {{ font-family: 'Inter', sans-serif; }}
+        .tab-active {{ border-color: #3b82f6; color: #3b82f6; }}
+        .tab-inactive {{ border-color: transparent; }}
+        .log-output {{ white-space: pre-wrap; word-wrap: break-word; }}
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
