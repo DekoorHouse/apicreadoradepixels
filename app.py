@@ -1,9 +1,8 @@
 import os
-import json
 from flask import Flask, request, jsonify, render_template_string
 import requests
 
-APP_TITLE = "Gestor de Activos de Meta"
+APP_TITLE = "Gestor de Activos de Meta (verificado)"
 
 TEMPLATE = """
 <!doctype html>
@@ -52,7 +51,12 @@ TEMPLATE = """
         const resp = await fetch('/connect-existing', { method: 'POST', body: fd });
         const data = await resp.json();
         if (!resp.ok) throw data;
-        out.textContent = "Conexión realizada: " + JSON.stringify(data);
+        // Mensaje amigable
+        if (data.message) {
+          out.textContent = data.message;
+        } else {
+          out.textContent = "Conexión realizada: " + JSON.stringify(data);
+        }
       } catch (e) {
         out.textContent = "Error al conectar: " + (e && e.error && e.error.message ? e.error.message : JSON.stringify(e));
       }
@@ -190,11 +194,24 @@ def graph_post(url, payload, token):
         raise e
     return r.json()
 
+def _extract_id(obj):
+    if not obj:
+        return None
+    if isinstance(obj, dict):
+        # If returns an object with id
+        if "id" in obj:
+            return obj["id"]
+        # Or a list under data
+        if "data" in obj and isinstance(obj["data"], list) and obj["data"]:
+            # Return first id
+            if isinstance(obj["data"][0], dict) and "id" in obj["data"][0]:
+                return obj["data"][0]["id"]
+    return None
+
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    # Variables pre-cargadas desde env o querystring
     access_token = request.args.get("access_token") or os.getenv("ACCESS_TOKEN", "")
     business_id = request.args.get("business_id") or os.getenv("BUSINESS_ID", "")
     ad_account_id = request.args.get("ad_account_id") or os.getenv("AD_ACCOUNT_ID", "")
@@ -207,16 +224,13 @@ def api_assets():
     if not token or not biz:
         return jsonify({"error": {"message": "Faltan access_token o business_id"}}), 400
     try:
-        # FIX: usar /adspixels (o /owned_pixels) en lugar de /owned_adspixels
         base = f"https://graph.facebook.com/v20.0/{biz}"
         pixels = graph_get(base + "/adspixels", {"fields": "id,name", "limit": 200}, token)
-        # WABAs: owned + client
         owned = graph_get(base + "/owned_whatsapp_business_accounts", {"fields": "id,name", "limit": 200}, token)
         try:
             client = graph_get(base + "/client_whatsapp_business_accounts", {"fields": "id,name", "limit": 200}, token)
-        except requests.HTTPError as e:
-            client = {"data": []}  # no todos los negocios tienen este edge
-
+        except requests.HTTPError:
+            client = {"data": []}
         datasets = pixels.get("data", [])
         wabas = (owned.get("data", []) or []) + (client.get("data", []) or [])
         return jsonify({"datasets": datasets, "wabas": wabas})
@@ -231,13 +245,45 @@ def connect_existing():
     waba_id    = request.form.get("waba_id")
     if not all([token, biz, dataset_id, waba_id]):
         return jsonify({"error": {"message": "Faltan campos: access_token, business_id, dataset_id, waba_id"}}), 400
+
+    # 1) Hacer el POST para conectar
+    post_error = None
+    connected = None
     try:
-        # Este endpoint de conexión puede variar según el tipo de dataset.
-        # A modo de ejemplo, devolvemos una respuesta indicando dónde ajustar el edge real.
         connected = graph_post(f"https://graph.facebook.com/v20.0/{waba_id}/dataset", {"dataset_id": dataset_id}, token)
-        return jsonify({"ok": True, "connected": connected, "dataset_id": dataset_id, "waba_id": waba_id})
     except requests.HTTPError as e:
-        return jsonify(getattr(e, "detail", {"error": {"message": str(e)}})), 400
+        post_error = getattr(e, "detail", {"error": {"message": str(e)}})
+
+    # 2) Verificar leyendo el edge
+    try:
+        verification = graph_get(f"https://graph.facebook.com/v20.0/{waba_id}/dataset", {"fields": "id,name"}, token)
+    except requests.HTTPError as e:
+        # Si ni siquiera podemos leer, devolvemos el error del GET
+        return jsonify({"ok": False, "error": getattr(e, "detail", {"error": {"message": str(e)}})}), 400
+
+    current_id = _extract_id(verification)
+    is_connected = (str(current_id) == str(dataset_id))
+
+    # Mensaje legible
+    if is_connected:
+        message = f"✅ Conexión verificada: el WABA {waba_id} tiene conectado el dataset {dataset_id}."
+    else:
+        if post_error:
+            message = f"⚠️ No se pudo verificar la conexión. Error al conectar: {post_error.get('error',{}).get('message','(sin detalle)')}"
+        else:
+            message = "⚠️ No se pudo verificar la conexión. El dataset leído no coincide."
+
+    resp = {
+        "ok": is_connected,
+        "message": message,
+        "connected": connected,
+        "verification": verification,
+        "waba_id": waba_id,
+        "dataset_id": dataset_id,
+        "post_error": post_error
+    }
+    status = 200 if is_connected else 400
+    return jsonify(resp), status
 
 @app.route("/create-and-connect", methods=["POST"])
 def create_and_connect():
@@ -251,24 +297,22 @@ def create_and_connect():
     if not all([token, biz, name, ad_ac, waba_id]):
         return jsonify({"error": {"message": "Faltan campos obligatorios"}}), 400
     try:
-        # Crear pixel/dataset en la cuenta de anuncios
-        # Para Pixel: POST /act_{ad_account_id}/adspixels
         create = graph_post(f"https://graph.facebook.com/v20.0/{ad_ac}/adspixels", {"name": name}, token)
         dataset_id = create.get("id")
-
-        # (Opcional) Compartir con otra ad account si se proporcionó (placeholder)
-        shared = None
-        if share_ad_ac:
-            shared = {"ok": True, "message": "Compartir con otra ad account: implementa tu edge real aquí."}
-
-        # Conectar dataset a WABA (placeholder)
-        connected = {"ok": True, "message": "Conexión WABA-dataset: implementa tu edge real aquí."}
-
+        # Conectar recién creado
+        connected = graph_post(f"https://graph.facebook.com/v20.0/{waba_id}/dataset", {"dataset_id": dataset_id}, token)
+        # Verificar
+        verification = graph_get(f"https://graph.facebook.com/v20.0/{waba_id}/dataset", {"fields": "id,name"}, token)
+        current_id = _extract_id(verification)
+        is_connected = (str(current_id) == str(dataset_id))
+        message = "✅ Creado y verificado." if is_connected else "⚠️ Creado pero no verificado."
         return jsonify({
+            "ok": is_connected,
+            "message": message,
             "created_dataset_id": dataset_id,
-            "share_result": shared,
-            "connect_result": connected
-        })
+            "connect_result": connected,
+            "verification": verification
+        }), (200 if is_connected else 400)
     except requests.HTTPError as e:
         return jsonify(getattr(e, "detail", {"error": {"message": str(e)}})), 400
 
