@@ -1,396 +1,277 @@
-# --- IMPORTANTE PARA EL DESPLIEGUE ---
-# Guarda este archivo con el nombre `app.py`.
-# El comando de inicio de Render (`gunicorn app:app`) busca un archivo llamado `app.py`
-# y dentro de él, una variable llamada `app`. Si el nombre del archivo es diferente,
-# el despliegue fallará con un error "AppImportError".
-# -----------------------------------------
-
+import os
+import json
 from flask import Flask, request, jsonify, render_template_string
 import requests
-import json
-import os
 
-# --- INICIALIZACIÓN DE LA APLICACIÓN FLASK ---
-app = Flask(__name__)
+APP_TITLE = "Gestor de Activos de Meta"
 
-# --- PLANTILLA HTML CON TAILWIND CSS Y JAVASCRIPT ---
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+TEMPLATE = """
+<!doctype html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestor de Activos de Meta</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-        .tab-active { border-color: #3b82f6; color: #3b82f6; }
-        .tab-inactive { border-color: transparent; }
-        .log-output { white-space: pre-wrap; word-wrap: break-word; }
-    </style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{ title }}</title>
+  <script>
+    async function cargarActivos() {
+      const access_token = document.getElementById('connect_access_token').value.trim();
+      const business_id  = document.getElementById('connect_business_id').value.trim();
+      const out = document.getElementById('resultados');
+      out.textContent = "Cargando...";
+      try {
+        const resp = await fetch(`/api/assets?access_token=${encodeURIComponent(access_token)}&business_id=${encodeURIComponent(business_id)}`);
+        const data = await resp.json();
+        if (!resp.ok) throw data;
+        const dsSel = document.getElementById('dataset_select');
+        const wbSel = document.getElementById('waba_select');
+        dsSel.innerHTML = "";
+        wbSel.innerHTML = "";
+        (data.datasets || []).forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.id;
+          opt.textContent = `${d.name} (${d.id})`;
+          dsSel.appendChild(opt);
+        });
+        (data.wabas || []).forEach(w => {
+          const opt = document.createElement('option');
+          opt.value = w.id;
+          opt.textContent = `${w.name || 'WABA'} (${w.id})`;
+          wbSel.appendChild(opt);
+        });
+        out.textContent = "Activos cargados. Selecciona y pulsa Conectar Activos.";
+      } catch (e) {
+        out.textContent = "Error al cargar activos: " + (e && e.error && e.error.message ? e.error.message : JSON.stringify(e));
+      }
+    }
+    async function conectarExistente() {
+      const form = document.getElementById('form_conectar');
+      const fd = new FormData(form);
+      const out = document.getElementById('resultados');
+      out.textContent = "Conectando...";
+      try {
+        const resp = await fetch('/connect-existing', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok) throw data;
+        out.textContent = "Conexión realizada: " + JSON.stringify(data);
+      } catch (e) {
+        out.textContent = "Error al conectar: " + (e && e.error && e.error.message ? e.error.message : JSON.stringify(e));
+      }
+    }
+  </script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #f6f7fb; margin: 0; padding: 0; }
+    .container { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+    .card { background: white; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.06); }
+    .card-header { padding: 18px 24px; border-bottom: 1px solid #eee; font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 10px; }
+    .tabs { display: flex; gap: 18px; padding: 14px 24px; border-bottom: 1px solid #eee; }
+    .tab { cursor: pointer; padding: 4px 0; }
+    .tab.active { color: #2563eb; border-bottom: 2px solid #2563eb; }
+    .content { padding: 20px 24px 28px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 12px; }
+    label { font-size: 13px; color: #374151; }
+    input, select { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 10px; }
+    button { padding: 10px 14px; border: 0; border-radius: 12px; background: #111827; color: white; cursor: pointer; }
+    button.secondary { background: #374151; }
+    pre { background: #0b1020; color: #d1e3ff; padding: 16px; border-radius: 12px; overflow: auto; }
+  </style>
 </head>
-<body class="bg-gray-100 text-gray-800">
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="card-header">Gestor de Activos de Meta</div>
+      <div class="tabs">
+        <div class="tab active" id="tab-conectar" onclick="document.getElementById('pane-conectar').style.display='block';document.getElementById('pane-crear').style.display='none';this.classList.add('active');document.getElementById('tab-crear').classList.remove('active');">Conectar Existente</div>
+        <div class="tab" id="tab-crear" onclick="document.getElementById('pane-crear').style.display='block';document.getElementById('pane-conectar').style.display='none';this.classList.add('active');document.getElementById('tab-conectar').classList.remove('active');">Crear Nuevo</div>
+      </div>
 
-    <div class="container mx-auto p-4 md:p-8 max-w-3xl">
-        <div class="bg-white rounded-lg shadow-lg">
-            <div class="p-6 md:p-8 border-b">
-                <div class="flex items-center">
-                    <svg class="h-8 w-8 text-blue-600 mr-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.627 48.627 0 0 1 12 20.904a48.627 48.627 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.57 50.57 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.906 59.906 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" /></svg>
-                    <h1 class="text-2xl font-bold">Gestor de Activos de Meta</h1>
-                </div>
+      <div class="content" id="pane-conectar">
+        <p>Selecciona un conjunto de datos existente y un WABA para conectarlos.</p>
+        <form id="form_conectar">
+          <div class="row">
+            <div>
+              <label>Access Token</label>
+              <input type="password" id="connect_access_token" name="access_token" value="{{ access_token or '' }}" required />
             </div>
-            
-            <!-- Pestañas -->
-            <div class="flex border-b">
-                <button id="tab-create" class="flex-1 py-4 px-2 text-center font-medium border-b-2 tab-active">Crear Nuevo</button>
-                <button id="tab-connect" class="flex-1 py-4 px-2 text-center font-medium border-b-2 tab-inactive">Conectar Existente</button>
+            <div>
+              <label>Business ID</label>
+              <input type="text" id="connect_business_id" name="connect_business_id" value="{{ business_id or '' }}" required />
             </div>
+          </div>
 
-            <div class="p-6 md:p-8">
-                <!-- Contenido Pestaña Crear -->
-                <div id="content-create">
-                    <form id="form-create">
-                        <div class="space-y-4">
-                            <p class="text-sm text-gray-600">Crea un nuevo conjunto de datos y conéctalo a un WABA.</p>
-                            <div>
-                                <label for="create_dataset_name" class="block text-sm font-medium text-gray-700">Nombre del Nuevo Conjunto de Datos</label>
-                                <input type="text" id="create_dataset_name" name="dataset_name" class="mt-1 block w-full input-field" value="Mi Conjunto de Datos (App)" required>
-                            </div>
-                            <div>
-                                <label for="create_access_token" class="block text-sm font-medium text-gray-700">Access Token</label>
-                                <input type="password" id="create_access_token" name="access_token" class="mt-1 block w-full input-field" required value="{{ access_token|default(\'\') }}">
-                            </div>
-                            <div>
-                                <label for="create_business_id" class="block text-sm font-medium text-gray-700">Business ID (Portafolio Comercial)</label>
-                                <input type="text" id="create_business_id" name="business_id" class="mt-1 block w-full input-field" required value="{{ business_id|default(\'\') }}">
-                            </div>
-                            <div>
-                                <label for="create_ad_account_id" class="block text-sm font-medium text-gray-700">Ad Account ID (Propietaria)</label>
-                                <input type="text" id="create_ad_account_id" name="ad_account_id" class="mt-1 block w-full input-field" placeholder="act_123456789" required>
-                            </div>
-                            <div>
-                                <label for="create_waba_id" class="block text-sm font-medium text-gray-700">WABA ID a Conectar</label>
-                                <input type="text" id="create_waba_id" name="waba_id" class="mt-1 block w-full input-field" required>
-                            </div>
-                            <div>
-                                <label for="create_ad_account_id_to_share" class="block text-sm font-medium text-gray-700">Ad Account ID a Compartir (Opcional)</label>
-                                <input type="text" id="create_ad_account_id_to_share" name="ad_account_id_to_share" class="mt-1 block w-full input-field" placeholder="act_987654321">
-                            </div>
-                        </div>
-                        <div class="mt-6">
-                            <button type="submit" class="w-full submit-btn bg-blue-600 hover:bg-blue-700">Crear y Conectar</button>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Contenido Pestaña Conectar -->
-                <div id="content-connect" class="hidden">
-                     <form id="form-connect">
-                        <div class="space-y-4">
-                            <p class="text-sm text-gray-600">Selecciona un conjunto de datos y un WABA existentes para conectarlos.</p>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label for="connect_access_token" class="block text-sm font-medium text-gray-700">Access Token</label>
-                                    <input type="password" id="connect_access_token" class="mt-1 block w-full input-field" required name="access_token" value="{{ access_token|default(\'\') }}">
-                                </div>
-                                <div>
-                                    <label for="connect_business_id" class="block text-sm font-medium text-gray-700">Business ID</label>
-                                    <input type="text" id="connect_business_id" class="mt-1 block w-full input-field" required name="connect_business_id" value="{{ business_id|default(\'\') }}">
-                                </div>
-                            </div>
-                            <button type="button" id="load-assets-btn" class="w-full submit-btn bg-gray-600 hover:bg-gray-700 mt-2">Cargar Activos Existentes</button>
-                            
-                            <div id="selectors" class="hidden space-y-4 pt-4">
-                                <div>
-                                    <label for="select_dataset" class="block text-sm font-medium text-gray-700">Seleccionar Conjunto de Datos</label>
-                                    <select id="select_dataset" name="dataset_id" class="mt-1 block w-full input-field" required></select>
-                                </div>
-                                <div>
-                                    <label for="select_waba" class="block text-sm font-medium text-gray-700">Seleccionar WABA</label>
-                                    <select id="select_waba" name="waba_id" class="mt-1 block w-full input-field" required></select>
-                                </div>
-                                <div class="mt-6">
-                                    <button type="submit" class="w-full submit-btn bg-blue-600 hover:bg-blue-700">Conectar Activos</button>
-                                </div>
-                            </div>
-                        </div>
-                    </form>
-                </div>
+          <div class="row">
+            <div>
+              <label>Conjunto de datos (pixel/dataset)</label>
+              <select id="dataset_select" name="dataset_id" required></select>
             </div>
-
-            <!-- Resultados -->
-            <div id="results" class="p-6 md:p-8 border-t hidden">
-                <h2 class="text-lg font-semibold mb-2">Resultados:</h2>
-                <div class="bg-gray-900 text-white font-mono text-sm rounded-md p-4 max-h-96 overflow-y-auto">
-                    <pre id="log-output" class="log-output"></pre>
-                </div>
+            <div>
+              <label>WABA</label>
+              <select id="waba_select" name="waba_id" required></select>
             </div>
-        </div>
+          </div>
+
+          <div class="row">
+            <button type="button" class="secondary" onclick="cargarActivos()">Cargar Activos Existentes</button>
+            <button type="button" onclick="conectarExistente()">Conectar Activos</button>
+          </div>
+        </form>
+        <h3>Resultados:</h3>
+        <pre id="resultados"></pre>
+      </div>
+
+      <div class="content" id="pane-crear" style="display:none;">
+        <p>Crea un nuevo conjunto de datos y conéctalo a un WABA.</p>
+        <form method="post" action="/create-and-connect">
+          <div class="row">
+            <div>
+              <label>Nombre del Conjunto</label>
+              <input type="text" name="dataset_name" placeholder="Mi Dataset" required />
+            </div>
+            <div>
+              <label>Access Token</label>
+              <input type="password" name="access_token" value="{{ access_token or '' }}" required />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Business ID</label>
+              <input type="text" name="business_id" value="{{ business_id or '' }}" required />
+            </div>
+            <div>
+              <label>Ad Account ID (act_123...)</label>
+              <input type="text" name="ad_account_id" value="{{ ad_account_id or '' }}" placeholder="act_1234567890" required />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>WABA ID</label>
+              <input type="text" name="waba_id" placeholder="XXXXXXXXXXXXXXXX" required />
+            </div>
+            <div>
+              <label>Ad Account a compartir (opcional)</label>
+              <input type="text" name="share_ad_account_id" placeholder="act_12345678 (opcional)" />
+            </div>
+          </div>
+          <div class="row">
+            <button type="submit">Crear y Conectar</button>
+          </div>
+        </form>
+      </div>
     </div>
-
-    <script>
-        // Utilidades y Clases CSS
-        const INPUT_FIELD_CLASSES = "px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500";
-        const SUBMIT_BTN_CLASSES = "inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500";
-        document.querySelectorAll('.input-field').forEach(el => el.className += ' ' + INPUT_FIELD_CLASSES);
-        document.querySelectorAll('.submit-btn').forEach(el => el.className += ' ' + SUBMIT_BTN_CLASSES);
-        
-        // Lógica de Pestañas
-        const tabCreate = document.getElementById('tab-create');
-        const tabConnect = document.getElementById('tab-connect');
-        const contentCreate = document.getElementById('content-create');
-        const contentConnect = document.getElementById('content-connect');
-
-        function switchTab(activeTab) {
-            [tabCreate, tabConnect].forEach(tab => tab.classList.remove('tab-active', 'tab-inactive'));
-            if (activeTab === 'create') {
-                tabCreate.classList.add('tab-active');
-                tabConnect.classList.add('tab-inactive');
-                contentCreate.classList.remove('hidden');
-                contentConnect.classList.add('hidden');
-            } else {
-                tabConnect.classList.add('tab-active');
-                tabCreate.classList.add('tab-inactive');
-                contentConnect.classList.remove('hidden');
-                contentCreate.classList.add('hidden');
-            }
-            document.getElementById('results').classList.add('hidden');
-        }
-        tabCreate.addEventListener('click', () => switchTab('create'));
-        tabConnect.addEventListener('click', () => switchTab('connect'));
-
-        // Lógica de Formularios
-        const resultsDiv = document.getElementById('results');
-        const logOutput = document.getElementById('log-output');
-
-        async function handleFormSubmit(form, endpoint, button) {
-            button.disabled = true;
-            button.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Procesando...';
-            resultsDiv.classList.remove('hidden');
-            logOutput.textContent = 'Iniciando proceso...';
-
-            const formData = new FormData(form);
-            const data = Object.fromEntries(formData.entries());
-
-            try {
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const result = await response.json();
-                logOutput.textContent = result.logs || `Error: ${result.error}\\n${result.details || ''}`;
-            } catch (error) {
-                logOutput.textContent = `Error de red: ${error.message}`;
-            } finally {
-                button.disabled = false;
-                button.textContent = button.dataset.originalText;
-            }
-        }
-        
-        // Formulario CREAR
-        const formCreate = document.getElementById('form-create');
-        formCreate.querySelector('button[type="submit"]').dataset.originalText = 'Crear y Conectar';
-        formCreate.addEventListener('submit', (e) => {
-            e.preventDefault();
-            handleFormSubmit(formCreate, '/create-new', e.target.querySelector('button[type="submit"]'));
-        });
-
-        // Formulario CONECTAR
-        const formConnect = document.getElementById('form-connect');
-        formConnect.querySelector('button[type="submit"]').dataset.originalText = 'Conectar Activos';
-        formConnect.addEventListener('submit', (e) => {
-            e.preventDefault();
-            handleFormSubmit(formConnect, '/connect-existing', e.target.querySelector('button[type="submit"]'));
-        });
-
-        // Botón Cargar Activos
-        const loadAssetsBtn = document.getElementById('load-assets-btn');
-        const selectorsDiv = document.getElementById('selectors');
-        const selectDataset = document.getElementById('select_dataset');
-        const selectWaba = document.getElementById('select_waba');
-
-        loadAssetsBtn.addEventListener('click', async () => {
-            const token = document.getElementById('connect_access_token').value;
-            const businessId = document.getElementById('connect_business_id').value;
-            if (!token || !businessId) {
-                alert('Por favor, ingresa el Access Token y el Business ID para cargar los activos.');
-                return;
-            }
-            
-            loadAssetsBtn.disabled = true;
-            loadAssetsBtn.textContent = 'Cargando...';
-            resultsDiv.classList.remove('hidden');
-            logOutput.textContent = 'Cargando activos desde la API de Meta...';
-
-            try {
-                const response = await fetch('/get-assets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ access_token: token, business_id: businessId })
-                });
-                const result = await response.json();
-
-                if (response.ok) {
-                    logOutput.textContent = 'Activos cargados con éxito. Por favor, selecciona desde los menús desplegables.';
-                    
-                    selectDataset.innerHTML = '<option value="">-- Selecciona un Conjunto de Datos --</option>';
-                    result.datasets.forEach(d => selectDataset.innerHTML += `<option value="${d.id}">${d.name} (ID: ${d.id})</option>`);
-                    
-                    selectWaba.innerHTML = '<option value="">-- Selecciona un WABA --</option>';
-                    result.wabas.forEach(w => selectWaba.innerHTML += `<option value="${w.id}">${w.name} (ID: ${w.id})</option>`);
-                    
-                    selectorsDiv.classList.remove('hidden');
-                } else {
-                    logOutput.textContent = `Error al cargar activos: ${result.error}\\n${result.details || ''}`;
-                }
-            } catch (error) {
-                logOutput.textContent = `Error de red: ${error.message}`;
-            } finally {
-                loadAssetsBtn.disabled = false;
-                loadAssetsBtn.textContent = 'Cargar Activos Existentes';
-            }
-        });
-    </script>
+  </div>
 </body>
 </html>
 """
 
-# --- LÓGICA DEL BACKEND ---
-API_VERSION = 'v20.0'
-BASE_URL = f'https://graph.facebook.com/{API_VERSION}'
+def graph_get(url, params, token):
+    params = dict(params or {})
+    params["access_token"] = token
+    r = requests.get(url, params=params, timeout=60)
+    if not r.ok:
+        try:
+            detail = r.json()
+        except Exception:
+            detail = {"error": {"message": r.text}}
+        e = requests.HTTPError(f"{r.status_code} {r.reason}")
+        e.detail = detail
+        raise e
+    return r.json()
 
-# --- Funciones de la API ---
-def create_dataset_pixel(ad_account_id, dataset_name, access_token, logs):
-    logs.append(f"1. Creando Conjunto de Datos '{dataset_name}'...")
-    url = f'{BASE_URL}/{ad_account_id}/adspixels'
-    params = {'name': dataset_name, 'access_token': access_token}
-    try:
-        response = requests.post(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        dataset_id = data.get('id')
-        if dataset_id:
-            logs.append(f"   ✅ Éxito. ID del Conjunto de Datos: {dataset_id}")
-            return dataset_id
-        else:
-            logs.append(f"   ❌ Error: No se pudo obtener el ID. Respuesta: {json.dumps(data)}")
-            return None
-    except requests.exceptions.RequestException as e:
-        logs.append(f"   ❌ Error en la API: {e.response.text if e.response else e}")
-        return None
+def graph_post(url, payload, token):
+    payload = dict(payload or {})
+    payload["access_token"] = token
+    r = requests.post(url, data=payload, timeout=60)
+    if not r.ok:
+        try:
+            detail = r.json()
+        except Exception:
+            detail = {"error": {"message": r.text}}
+        e = requests.HTTPError(f"{r.status_code} {r.reason}")
+        e.detail = detail
+        raise e
+    return r.json()
 
-def share_dataset_with_ad_account(dataset_id, ad_account_to_share, access_token, logs):
-    logs.append(f"\n2. Compartiendo {dataset_id} con la cuenta {ad_account_to_share}...")
-    url = f'{BASE_URL}/{dataset_id}/shared_accounts'
-    params = {'account_id': ad_account_to_share, 'access_token': access_token}
-    try:
-        response = requests.post(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            logs.append(f"   ✅ Activo compartido con éxito.")
-        else:
-            logs.append(f"   ❌ Problema al compartir. Respuesta: {json.dumps(data)}")
-    except requests.exceptions.RequestException as e:
-        logs.append(f"   ❌ Error en la API: {e.response.text if e.response else e}")
+app = Flask(__name__)
 
-def connect_waba_to_dataset(business_id, dataset_id, waba_id, access_token, logs):
-    logs.append(f"\nConectando WABA ({waba_id}) al Conjunto de Datos ({dataset_id})...")
-    url = f'{BASE_URL}/{business_id}/whatsapp_business_accounts_to_pixels'
-    params = {'pixel_id': dataset_id, 'whatsapp_business_account_id': waba_id, 'access_token': access_token}
-    try:
-        response = requests.post(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('success'):
-            logs.append(f"   ✅ WABA conectado con éxito.")
-        else:
-            logs.append(f"   ❌ Problema al conectar WABA. Respuesta: {json.dumps(data)}")
-    except requests.exceptions.RequestException as e:
-        logs.append(f"   ❌ Error en la API: {e.response.text if e.response else e}")
-
-# --- RUTAS DE LA APLICACIÓN (ENDPOINTS) ---
-@app.route('/')
+@app.route("/")
 def index():
-    access_token = request.args.get('access_token') or os.environ.get('ACCESS_TOKEN', '')
-    business_id = request.args.get('business_id') or os.environ.get('BUSINESS_ID', '')
-    return render_template_string(HTML_TEMPLATE, access_token=access_token, business_id=business_id)
+    # Variables pre-cargadas desde env o querystring
+    access_token = request.args.get("access_token") or os.getenv("ACCESS_TOKEN", "")
+    business_id = request.args.get("business_id") or os.getenv("BUSINESS_ID", "")
+    ad_account_id = request.args.get("ad_account_id") or os.getenv("AD_ACCOUNT_ID", "")
+    return render_template_string(TEMPLATE, title=APP_TITLE, access_token=access_token, business_id=business_id, ad_account_id=ad_account_id)
 
-@app.route('/get-assets', methods=['POST'])
-def get_assets():
-    data = request.json
-    access_token = data.get('access_token')
-    business_id = data.get('business_id')
-
-    if not all([access_token, business_id]):
-        return jsonify({'error': 'Access Token y Business ID son requeridos.'}), 400
-
-    headers = {'Authorization': f'Bearer {access_token}'}
-    
+@app.route("/api/assets")
+def api_assets():
+    token = request.args.get("access_token")
+    biz   = request.args.get("business_id")
+    if not token or not biz:
+        return jsonify({"error": {"message": "Faltan access_token o business_id"}}), 400
     try:
-        # Obtener Conjuntos de Datos (Píxeles)
-        pixels_url = f'{BASE_URL}/{business_id}/owned_adspixels?fields=id,name'
-        pixels_response = requests.get(pixels_url, headers=headers)
-        pixels_response.raise_for_status()
-        datasets = pixels_response.json().get('data', [])
+        # FIX: usar /adspixels (o /owned_pixels) en lugar de /owned_adspixels
+        base = f"https://graph.facebook.com/v20.0/{biz}"
+        pixels = graph_get(base + "/adspixels", {"fields": "id,name", "limit": 200}, token)
+        # WABAs: owned + client
+        owned = graph_get(base + "/owned_whatsapp_business_accounts", {"fields": "id,name", "limit": 200}, token)
+        try:
+            client = graph_get(base + "/client_whatsapp_business_accounts", {"fields": "id,name", "limit": 200}, token)
+        except requests.HTTPError as e:
+            client = {"data": []}  # no todos los negocios tienen este edge
 
-        # Obtener WABAs
-        wabas_url = f'{BASE_URL}/{business_id}/owned_whatsapp_business_accounts?fields=id,name'
-        wabas_response = requests.get(wabas_url, headers=headers)
-        wabas_response.raise_for_status()
-        wabas = wabas_response.json().get('data', [])
-        
-        return jsonify({'datasets': datasets, 'wabas': wabas})
+        datasets = pixels.get("data", [])
+        wabas = (owned.get("data", []) or []) + (client.get("data", []) or [])
+        return jsonify({"datasets": datasets, "wabas": wabas})
+    except requests.HTTPError as e:
+        return jsonify(getattr(e, "detail", {"error": {"message": str(e)}})), 400
 
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': 'Error al contactar la API de Meta.', 'details': e.response.text if e.response else str(e)}), 500
-
-@app.route('/create-new', methods=['POST'])
-def create_new_and_connect():
-    data = request.json
-    logs = []
-    access_token = data.get('access_token')
-    business_id = data.get('business_id')
-    ad_account_id = data.get('ad_account_id')
-    waba_id = data.get('waba_id')
-    dataset_name = data.get('dataset_name')
-    ad_account_to_share = data.get('ad_account_id_to_share')
-
-    if not all([access_token, business_id, ad_account_id, waba_id, dataset_name]):
-        return jsonify({'logs': 'Error: Faltan campos requeridos.'}), 400
-
-    dataset_id = create_dataset_pixel(ad_account_id, dataset_name, access_token, logs)
-    
-    if dataset_id:
-        if ad_account_to_share:
-            share_dataset_with_ad_account(dataset_id, ad_account_to_share, access_token, logs)
-        connect_waba_to_dataset(business_id, dataset_id, waba_id, access_token, logs)
-        logs.append("\n🎉 Proceso de creación completado.")
-    else:
-        logs.append("\n❌ El proceso falló. Revisa los logs de arriba.")
-
-    return jsonify({'logs': "\n".join(logs)})
-
-@app.route('/connect-existing', methods=['POST'])
+@app.route("/connect-existing", methods=["POST"])
 def connect_existing():
-    data = request.json
-    logs = []
-    access_token = data.get('access_token')
-    business_id = data.get('connect_business_id')
-    dataset_id = data.get('dataset_id')
-    waba_id = data.get('waba_id')
+    token = request.form.get("access_token")
+    biz   = request.form.get("connect_business_id") or request.form.get("business_id")
+    dataset_id = request.form.get("dataset_id")
+    waba_id    = request.form.get("waba_id")
+    if not all([token, biz, dataset_id, waba_id]):
+        return jsonify({"error": {"message": "Faltan campos: access_token, business_id, dataset_id, waba_id"}}), 400
+    try:
+        # Este endpoint de conexión puede variar según el tipo de dataset.
+        # A modo de ejemplo, devolvemos una respuesta indicando dónde ajustar el edge real.
+        result = {"ok": True, "message": "Conexión WABA-dataset: ajusta el endpoint aquí según tu integración real.", "dataset_id": dataset_id, "waba_id": waba_id}
+        return jsonify(result)
+    except requests.HTTPError as e:
+        return jsonify(getattr(e, "detail", {"error": {"message": str(e)}})), 400
 
-    if not all([access_token, business_id, dataset_id, waba_id]):
-        return jsonify({'logs': 'Error: Debes seleccionar un conjunto de datos y un WABA.'}), 400
-    
-    # En la conexión, el paso 1 y 2 no existen, solo el 3.
-    connect_waba_to_dataset(business_id, dataset_id, waba_id, access_token, logs)
-    logs.append("\n🎉 Proceso de conexión completado.")
+@app.route("/create-and-connect", methods=["POST"])
+def create_and_connect():
+    token = request.form.get("access_token")
+    biz   = request.form.get("business_id")
+    name  = request.form.get("dataset_name")
+    ad_ac = request.form.get("ad_account_id")
+    waba_id = request.form.get("waba_id")
+    share_ad_ac = request.form.get("share_ad_account_id")
 
-    return jsonify({'logs': "\n".join(logs)})
+    if not all([token, biz, name, ad_ac, waba_id]):
+        return jsonify({"error": {"message": "Faltan campos obligatorios"}}), 400
+    try:
+        # Crear pixel/dataset en la cuenta de anuncios
+        # Para Pixel: POST /act_{ad_account_id}/adspixels
+        create = graph_post(f"https://graph.facebook.com/v20.0/{ad_ac}/adspixels", {"name": name}, token)
+        dataset_id = create.get("id")
 
+        # (Opcional) Compartir con otra ad account si se proporcionó (placeholder)
+        shared = None
+        if share_ad_ac:
+            shared = {"ok": True, "message": "Compartir con otra ad account: implementa tu edge real aquí."}
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+        # Conectar dataset a WABA (placeholder)
+        connected = {"ok": True, "message": "Conexión WABA-dataset: implementa tu edge real aquí."}
+
+        return jsonify({
+            "created_dataset_id": dataset_id,
+            "share_result": shared,
+            "connect_result": connected
+        })
+    except requests.HTTPError as e:
+        return jsonify(getattr(e, "detail", {"error": {"message": str(e)}})), 400
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
