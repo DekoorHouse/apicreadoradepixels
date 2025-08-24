@@ -411,7 +411,7 @@ def connect_waba_to_dataset(business_id, dataset_id, waba_id, access_token, logs
 # --- RUTAS DE LA APLICACIÓN ---
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return get_html_template()
 
 @app.route('/get-assets', methods=['POST'])
 @rate_limit(max_requests=5, window=60)  # ✅ Rate limiting añadido
