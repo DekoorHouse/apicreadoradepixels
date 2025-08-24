@@ -225,11 +225,11 @@ HTML_TEMPLATE = """
                     body: JSON.stringify(data)
                 });
                 const result = await response.json();
-                if (response.status === 429) {
+                if (response.status === 429) {{
                     logOutput.textContent = 'Error: Rate limit excedido. Intenta de nuevo en unos minutos.';
-                } else {
-                    logOutput.textContent = result.logs || `Error: ${result.error}\\n${result.details || ''}`;
-                }
+                }} else {{
+                    logOutput.textContent = result.logs || `Error: ${{result.error}}\\n${{result.details || ''}}`;
+                }}
             } catch (error) {
                 logOutput.textContent = `Error de red: ${error.message}`;
             } finally {
